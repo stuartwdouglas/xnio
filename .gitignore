@@ -5,3 +5,5 @@
 target
 .idea
 *.ipr
+*.o
+*.so

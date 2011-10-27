@@ -14,7 +14,9 @@
 
     <modules>
         <module>api</module>
+        <module>test-support</module>
         <module>nio-impl</module>
+        <module>native</module>
     </modules>
 
     <properties>
@@ -60,6 +62,11 @@
             <dependency>
                 <groupId>org.jboss.xnio</groupId>
                 <artifactId>xnio-nio</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.jboss.xnio</groupId>
+                <artifactId>xnio-test-support</artifactId>
                 <version>${project.version}</version>
             </dependency>
 

@@ -25,6 +25,7 @@ import java.util.Collections;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.Executor;
+import org.jboss.logging.Logger;
 
 import static org.xnio.Messages.futureMsg;
 
@@ -34,6 +35,9 @@ import static org.xnio.Messages.futureMsg;
  * @param <T> the type of result that this operation produces
  */
 public abstract class AbstractIoFuture<T> implements IoFuture<T> {
+
+    private static final Logger log = Logger.getLogger("org.xnio.future");
+
     private final Object lock = new Object();
     private Status status = Status.WAITING;
     private Object result;
@@ -229,6 +233,7 @@ public abstract class AbstractIoFuture<T> implements IoFuture<T> {
     protected boolean setException(IOException exception) {
         synchronized (lock) {
             if (status == Status.WAITING) {
+                log.tracef(exception, "Setting exception on %s", this);
                 status = Status.FAILED;
                 result = exception;
                 cancellables = null;
@@ -250,6 +255,7 @@ public abstract class AbstractIoFuture<T> implements IoFuture<T> {
     protected boolean setResult(T result) {
         synchronized (lock) {
             if (status == Status.WAITING) {
+                log.tracef("Setting result %s on %s", result, this);
                 status = Status.DONE;
                 this.result = result;
                 cancellables = null;
@@ -270,6 +276,7 @@ public abstract class AbstractIoFuture<T> implements IoFuture<T> {
     protected boolean setCancelled() {
         synchronized (lock) {
             if (status == Status.WAITING) {
+                log.tracef("Setting cancelled on %s", this);
                 status = Status.CANCELLED;
                 cancellables = null;
                 runAllNotifiers();

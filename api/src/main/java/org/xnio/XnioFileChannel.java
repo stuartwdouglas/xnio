@@ -29,11 +29,15 @@ import java.nio.channels.WritableByteChannel;
 import org.xnio.channels.StreamSinkChannel;
 import org.xnio.channels.StreamSourceChannel;
 
-final class XnioFileChannel extends FileChannel {
+public final class XnioFileChannel extends FileChannel {
     private final FileChannel delegate;
 
     XnioFileChannel(final FileChannel delegate) {
         this.delegate = delegate;
+    }
+
+    public FileChannel getDelegate() {
+        return delegate;
     }
 
     public int read(final ByteBuffer dst) throws IOException {
