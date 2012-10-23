@@ -380,7 +380,7 @@ final class NioTcpServer extends AbstractNioChannel<NioTcpServer> implements Acc
             if (sendBuffer > 0) socket.setSendBufferSize(sendBuffer);
             newChannel = new NioTcpChannel(worker, this, accepted);
             final WorkerThread workerThread = WorkerThread.getCurrent();
-            if (workerThread != null) {
+            if (workerThread != null && acceptHandles.size() > 1) {
                 newChannel.start(workerThread, workerThread.isWriteThread());
             } else {
                 newChannel.start();
