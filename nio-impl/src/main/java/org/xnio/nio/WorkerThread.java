@@ -331,11 +331,12 @@ final class WorkerThread extends Thread implements XnioExecutor {
             if (log.isTraceEnabled()) {
                 log.logf(NH_FQCN, Logger.Level.TRACE, null, "Setting operations of key %s of %s to %02x (other thread)", key, channel, Integer.valueOf(ops));
             }
-            try {
-                key.interestOps(ops);
-                selector.wakeup();
-            } catch (CancelledKeyException ignored) {
-            }
+            this.execute(new Runnable() {
+                @Override
+                public void run() {
+                    key.interestOps(ops);
+                }
+            });
         }
     }
 
