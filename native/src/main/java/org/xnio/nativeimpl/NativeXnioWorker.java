@@ -397,6 +397,8 @@ final class NativeXnioWorker extends XnioWorker {
                 writeThread = choose(true);
                 readThread = choose(false);
                 final TcpSocketChannel channel = new TcpSocketChannel(this, fd, readThread, writeThread, null);
+                readThread.register(channel);
+                writeThread.register(channel);
                 int res = Native.accept(fd);
                 final FutureResult<ConnectedStreamChannel> futureResult = new FutureResult<ConnectedStreamChannel>();
                 if (res == -Native.EAGAIN) {
