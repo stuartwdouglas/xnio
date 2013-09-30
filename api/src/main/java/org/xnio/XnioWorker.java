@@ -22,6 +22,8 @@ package org.xnio;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
+import java.security.AccessController;
+import java.security.PrivilegedAction;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.AbstractExecutorService;
@@ -67,6 +69,8 @@ import static org.xnio._private.Messages.msg;
 @SuppressWarnings("unused")
 public abstract class XnioWorker extends AbstractExecutorService implements Configurable, ExecutorService, XnioIoFactory {
 
+    private static final RuntimePermission CREATE_XNIO_WORKER = new RuntimePermission("createXnioWorker");
+
     private final Xnio xnio;
     private final TaskPool taskPool;
     private final String name;
@@ -96,6 +100,14 @@ public abstract class XnioWorker extends AbstractExecutorService implements Conf
     protected XnioWorker(final Xnio xnio, final ThreadGroup threadGroup, final OptionMap optionMap, final Runnable terminationTask) {
         this.xnio = xnio;
         this.terminationTask = terminationTask;
+
+        //we perform a permission check, as otherwise code could do a permission escalation by creating the worker
+        //and then submitting a task to the thread pool
+        final SecurityManager sm = System.getSecurityManager();
+        if (sm != null) {
+            sm.checkPermission(CREATE_XNIO_WORKER);
+        }
+
         String workerName = optionMap.get(Options.WORKER_NAME);
         if (workerName == null) {
             workerName = "XNIO-" + seq.getAndIncrement();
@@ -111,7 +123,14 @@ public abstract class XnioWorker extends AbstractExecutorService implements Conf
             taskQueue,
             new ThreadFactory() {
                 public Thread newThread(final Runnable r) {
-                    final Thread taskThread = new Thread(threadGroup, r, name + " task-" + getNextSeq(), optionMap.get(Options.STACK_SIZE, 0L));
+                    //we create the thread in a privileged context, to prevent the access control context
+                    //of a caller from being inherited
+                    final Thread taskThread = AccessController.doPrivileged(new PrivilegedAction<Thread>() {
+                        @Override
+                        public Thread run() {
+                            return new Thread(threadGroup, r, name + " task-" + getNextSeq(), optionMap.get(Options.STACK_SIZE, 0L));
+                        }
+                    });
                     // Mark the thread as daemon if the Options.THREAD_DAEMON has been set
                     if (markThreadAsDaemon) {
                         taskThread.setDaemon(true);
