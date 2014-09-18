@@ -27,6 +27,7 @@ import java.io.IOException;
 import java.net.Inet4Address;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
+import java.nio.channels.Channel;
 
 import org.junit.After;
 import org.junit.Before;
@@ -72,7 +73,7 @@ public class TcpConnectionTestCase extends AbstractStreamSinkSourceChannelTest<S
 
     @Override
     protected synchronized void initChannels(XnioWorker xnioWorker, OptionMap optionMap, TestChannelListener<StreamSinkChannel> channelListener,
-            TestChannelListener<StreamSourceChannel> serverChannelListener) throws IOException { 
+            final TestChannelListener<StreamSourceChannel> serverChannelListener) throws IOException {
 
         if (connection != null) {
             connection.close();
@@ -83,7 +84,18 @@ public class TcpConnectionTestCase extends AbstractStreamSinkSourceChannelTest<S
         server.getIoThread().execute(new Runnable() {
             public void run() {
                 try {
-                    accepted.setResult(server.accept());
+                    StreamConnection accept = server.accept();
+                    if(accept != null) {
+                        accepted.setResult(accept);
+                    } else {
+                        server.getAcceptSetter().set(new ChannelListener<AcceptingChannel>() {
+                            @Override
+                            public void handleEvent(AcceptingChannel channel) {
+                                run();
+                            }
+                        });
+                        server.resumeAccepts();
+                    }
                 } catch (IOException e) {
                     accepted.setException(e);
                 }

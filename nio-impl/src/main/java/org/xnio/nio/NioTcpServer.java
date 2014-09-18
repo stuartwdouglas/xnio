@@ -386,9 +386,18 @@ final class NioTcpServer extends AbstractNioChannel<NioTcpServer> implements Acc
             if (accepted != null) try {
                 accepted.configureBlocking(false);
                 final Socket socket = accepted.socket();
-                socket.setKeepAlive(keepAlive != 0);
-                socket.setOOBInline(oobInline != 0);
-                socket.setTcpNoDelay(tcpNoDelay != 0);
+                try {
+                    socket.setKeepAlive(keepAlive != 0);
+                } catch (IOException e) {
+                }
+                try {
+                    socket.setOOBInline(oobInline != 0);
+                } catch (IOException e) {
+                }
+                try {
+                    socket.setTcpNoDelay(tcpNoDelay != 0);
+                } catch (IOException e) {
+                }
                 final int sendBuffer = this.sendBuffer;
                 if (sendBuffer > 0) socket.setSendBufferSize(sendBuffer);
                 final SelectionKey selectionKey = current.registerChannel(accepted);
