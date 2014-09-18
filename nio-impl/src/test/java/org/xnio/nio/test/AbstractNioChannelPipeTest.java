@@ -33,6 +33,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import org.jboss.logging.Logger;
 import org.junit.After;
+import org.junit.Assume;
 import org.junit.Before;
 import org.junit.Test;
 import org.xnio.ChannelListener;
@@ -102,6 +103,7 @@ public abstract class AbstractNioChannelPipeTest<S extends StreamSourceChannel, 
 
     @Before
     public void setupTest() {
+        Assume.assumeTrue(isLinux());
         problems.clear();
         leftChannelOK = new AtomicBoolean(false);
         rightChannelOK = new AtomicBoolean(false);
@@ -109,6 +111,9 @@ public abstract class AbstractNioChannelPipeTest<S extends StreamSourceChannel, 
 
     @After
     public void checkProblems() {
+        if(!isLinux()) {
+            return;
+        }
         assertTrue(leftChannelOK.get());
         assertTrue(rightChannelOK.get());
         for (Throwable problem : problems) {
@@ -367,6 +372,10 @@ public abstract class AbstractNioChannelPipeTest<S extends StreamSourceChannel, 
                 }
             }
         });
+    }
+
+    private boolean isLinux() {
+        return System.getProperty("os.name").toLowerCase().contains("linux");
     }
 
     @Test
