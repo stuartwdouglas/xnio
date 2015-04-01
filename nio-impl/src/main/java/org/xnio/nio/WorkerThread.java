@@ -19,6 +19,7 @@
 package org.xnio.nio;
 
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.nio.channels.CancelledKeyException;
@@ -84,6 +85,7 @@ final class WorkerThread extends XnioIoThread implements XnioExecutor {
     private static final long START_TIME = System.nanoTime();
 
     private final Selector selector;
+    private final SelectedSelectionKeySet selectedKeysSet;
     private final Object workLock = new Object();
 
     private final Queue<Runnable> selectorWorkQueue = new ArrayDeque<Runnable>();
@@ -103,6 +105,32 @@ final class WorkerThread extends XnioIoThread implements XnioExecutor {
     WorkerThread(final NioXnioWorker worker, final Selector selector, final String name, final ThreadGroup group, final long stackSize, final int number) {
         super(worker, number, group, name, stackSize);
         this.selector = selector;
+        SelectedSelectionKeySet selectedKeys = null;
+        try {
+            SelectedSelectionKeySet selectedKeySet = new SelectedSelectionKeySet();
+
+            Class<?> selectorImplClass = Class.forName("sun.nio.ch.SelectorImpl", false, getClass().getClassLoader());
+
+            // Ensure the current selector implementation is what we can instrument.
+            if (selectorImplClass.isAssignableFrom(selector.getClass())) {
+
+                Field selectedKeysField = selectorImplClass.getDeclaredField("selectedKeys");
+                Field publicSelectedKeysField = selectorImplClass.getDeclaredField("publicSelectedKeys");
+
+                selectedKeysField.setAccessible(true);
+                publicSelectedKeysField.setAccessible(true);
+
+                selectedKeysField.set(selector, selectedKeySet);
+                publicSelectedKeysField.set(selector, selectedKeySet);
+
+                selectedKeys = selectedKeySet;
+                log.tracef("Instrumented an optimized java.util.Set into: %s", selector);
+            }
+        } catch (Throwable t) {
+            selectedKeys = null;
+            log.tracef(t, "Failed to instrument an optimized java.util.Set into: %s", selector);
+        }
+        this.selectedKeysSet = selectedKeys;
     }
 
     static WorkerThread getCurrent() {
@@ -514,19 +542,25 @@ final class WorkerThread extends XnioIoThread implements XnioExecutor {
                 }
                 selectorLog.tracef("Selected on %s", selector);
                 // iterate the ready key set
+                SelectionKey[] keyArray;
                 synchronized (selector) {
-                    selectedKeys = selector.selectedKeys();
-                    synchronized (selectedKeys) {
-                        // copy so that handlers can safely cancel keys
-                        keys = selectedKeys.toArray(keys);
-                        Arrays.fill(keys, selectedKeys.size(), keys.length, null);
-                        selectedKeys.clear();
+                    if(selectedKeysSet != null) {
+                        keyArray = selectedKeysSet.flip();
+                    } else {
+                        selectedKeys = selector.selectedKeys();
+                        synchronized (selectedKeys) {
+                            // copy so that handlers can safely cancel keys
+                            keys = selectedKeys.toArray(keys);
+                            Arrays.fill(keys, selectedKeys.size(), keys.length, null);
+                            selectedKeys.clear();
+                            keyArray = keys;
+                        }
                     }
                 }
-                for (int i = 0; i < keys.length; i++) {
-                    final SelectionKey key = keys[i];
+                for (int i = 0; i < keyArray.length; i++) {
+                    final SelectionKey key = keyArray[i];
                     if (key == null) break; //end of list
-                    keys[i] = null;
+                    keyArray[i] = null;
                     final int ops;
                     try {
                         ops = key.interestOps();
