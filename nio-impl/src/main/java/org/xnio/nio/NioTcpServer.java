@@ -116,7 +116,7 @@ final class NioTcpServer extends AbstractNioChannel<NioTcpServer> implements Acc
         if (threadCount == 0) {
             throw log.noThreads();
         }
-        final int tokens = optionMap.get(Options.BALANCING_TOKENS, -1);
+        final int tokens = threadCount == 1 ? -1 : optionMap.get(Options.BALANCING_TOKENS, -1); //don't use balancing tokens if one thread is configured
         final int connections = optionMap.get(Options.BALANCING_CONNECTIONS, 16);
         if (tokens != -1) {
             if (tokens < 1 || tokens >= threadCount) {
