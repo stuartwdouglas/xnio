@@ -93,6 +93,8 @@ final class WorkerThread extends XnioIoThread implements XnioExecutor {
 
     private static final int SHUTDOWN = (1 << 31);
 
+    private volatile boolean waitingOnSelector = false;
+
     private static final AtomicIntegerFieldUpdater<WorkerThread> stateUpdater = AtomicIntegerFieldUpdater.newUpdater(WorkerThread.class, "state");
 
     static {
@@ -499,11 +501,21 @@ final class WorkerThread extends XnioIoThread implements XnioExecutor {
                         selector.selectNow();
                     } else if (delayTime == Long.MAX_VALUE) {
                         selectorLog.tracef("Beginning select on %s", selector);
-                        selector.select();
+                        waitingOnSelector = true;
+                        try {
+                            selector.select();
+                        } finally {
+                            waitingOnSelector = false;
+                        }
                     } else {
                         final long millis = 1L + delayTime / 1000000L;
                         selectorLog.tracef("Beginning select on %s (with timeout)", selector);
-                        selector.select(millis);
+                        waitingOnSelector = true;
+                        try {
+                            selector.select(millis);
+                        } finally {
+                            waitingOnSelector = false;
+                        }
                     }
                 } catch (CancelledKeyException ignored) {
                     // Mac and other buggy implementations sometimes spits these out
@@ -744,7 +756,9 @@ final class WorkerThread extends XnioIoThread implements XnioExecutor {
         } else {
             try {
                 key.interestOps(key.interestOps() | ops);
-                selector.wakeup();
+                if(waitingOnSelector) {
+                    selector.wakeup();
+                }
             } catch (CancelledKeyException ignored) {
             }
         }
