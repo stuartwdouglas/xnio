@@ -19,6 +19,7 @@
 package org.xnio.nio;
 
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.nio.channels.CancelledKeyException;
@@ -93,6 +94,8 @@ final class WorkerThread extends XnioIoThread implements XnioExecutor {
 
     private static final int SHUTDOWN = (1 << 31);
 
+    private final SelectedSelectionKeySet selectedSelectionKeySet;
+
     private static final AtomicIntegerFieldUpdater<WorkerThread> stateUpdater = AtomicIntegerFieldUpdater.newUpdater(WorkerThread.class, "state");
 
     static {
@@ -103,6 +106,34 @@ final class WorkerThread extends XnioIoThread implements XnioExecutor {
     WorkerThread(final NioXnioWorker worker, final Selector selector, final String name, final ThreadGroup group, final long stackSize, final int number) {
         super(worker, number, group, name, stackSize);
         this.selector = selector;
+
+        SelectedSelectionKeySet selectedKeySet = null;
+        try {
+
+            Class<?> selectorImplClass =
+                    Class.forName("sun.nio.ch.SelectorImpl", false, getClass().getClassLoader());
+
+            // Ensure the current selector implementation is what we can instrument.
+            if (selectorImplClass.isAssignableFrom(selector.getClass())) {
+
+                Field selectedKeysField = selectorImplClass.getDeclaredField("selectedKeys");
+                Field publicSelectedKeysField = selectorImplClass.getDeclaredField("publicSelectedKeys");
+
+                selectedKeysField.setAccessible(true);
+                publicSelectedKeysField.setAccessible(true);
+
+                selectedKeySet = new SelectedSelectionKeySet();
+
+                selectedKeysField.set(selector, selectedKeySet);
+                publicSelectedKeysField.set(selector, selectedKeySet);
+                log.tracef("Instrumented an optimized java.util.Set into: %s", selector);
+            }
+        } catch (Throwable t) {
+            selectedKeySet = null;
+            log.tracef(t, "Failed to instrument an optimized java.util.Set into: %s", selector);
+        }
+        this.selectedSelectionKeySet = selectedKeySet;
+
     }
 
     static WorkerThread getCurrent() {
@@ -517,10 +548,14 @@ final class WorkerThread extends XnioIoThread implements XnioExecutor {
                 synchronized (selector) {
                     selectedKeys = selector.selectedKeys();
                     synchronized (selectedKeys) {
-                        // copy so that handlers can safely cancel keys
-                        keys = selectedKeys.toArray(keys);
-                        Arrays.fill(keys, selectedKeys.size(), keys.length, null);
-                        selectedKeys.clear();
+                        if(selectedSelectionKeySet == null) {
+                            // copy so that handlers can safely cancel keys
+                            keys = selectedKeys.toArray(keys);
+                            Arrays.fill(keys, selectedKeys.size(), keys.length, null);
+                            selectedKeys.clear();
+                        } else {
+                            keys = selectedSelectionKeySet.flip();
+                        }
                     }
                 }
                 for (int i = 0; i < keys.length; i++) {
