@@ -464,6 +464,13 @@ final class WorkerThread extends XnioIoThread implements XnioExecutor {
                     // clear interrupt status
                     Thread.interrupted();
                     safeRun(task);
+                    if(task == null) {
+                        polling = true;
+                    }
+                    task = workQueue.poll();
+                    if(task != null) {
+                        polling = false;
+                    }
                 } while (task != null);
                 // all tasks have been run
                 oldState = state;
@@ -505,7 +512,6 @@ final class WorkerThread extends XnioIoThread implements XnioExecutor {
                         selector.selectNow();
                     } else if (delayTime == Long.MAX_VALUE) {
                         selectorLog.tracef("Beginning select on %s", selector);
-                        polling = true;
                         try {
                             selector.select();
                         } finally {
@@ -514,7 +520,6 @@ final class WorkerThread extends XnioIoThread implements XnioExecutor {
                     } else {
                         final long millis = 1L + delayTime / 1000000L;
                         selectorLog.tracef("Beginning select on %s (with timeout)", selector);
-                        polling = true;
                         try {
                             selector.select(millis);
                         } finally {
