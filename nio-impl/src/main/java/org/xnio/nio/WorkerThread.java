@@ -503,9 +503,11 @@ final class WorkerThread extends XnioIoThread implements XnioExecutor {
                         selectorLog.tracef("Beginning select on %s", selector);
                         polling = true;
                         try {
-                            if (workQueue.peek() != null) {
-                                selector.selectNow();
-                            } else {
+                            boolean tasks;
+                            synchronized (lock) {
+                                tasks = workQueue.peek() != null;
+                            }
+                            if (!tasks) {
                                 selector.select();
                             }
                         } finally {
