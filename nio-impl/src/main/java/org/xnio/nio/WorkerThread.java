@@ -37,6 +37,7 @@ import java.util.Iterator;
 import java.util.Queue;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.concurrent.atomic.AtomicLong;
@@ -86,7 +87,7 @@ final class WorkerThread extends XnioIoThread implements XnioExecutor {
     private final Selector selector;
     private final Object workLock = new Object();
 
-    private final Queue<Runnable> selectorWorkQueue = new ArrayDeque<Runnable>();
+    private final Queue<Runnable> selectorWorkQueue = new ConcurrentLinkedQueue<>();
     private final TreeSet<TimeKey> delayWorkQueue = new TreeSet<TimeKey>();
 
     private volatile int state;
@@ -587,9 +588,7 @@ final class WorkerThread extends XnioIoThread implements XnioExecutor {
         if ((state & SHUTDOWN) != 0) {
             throw log.threadExiting();
         }
-        synchronized (workLock) {
-            selectorWorkQueue.add(command);
-        }
+        selectorWorkQueue.add(command);
         if (polling) { // flag is always false if we're the same thread
             selector.wakeup();
         }
@@ -701,9 +700,7 @@ final class WorkerThread extends XnioIoThread implements XnioExecutor {
     }
 
     void queueTask(final Runnable task) {
-        synchronized (workLock) {
-            selectorWorkQueue.add(task);
-        }
+        selectorWorkQueue.add(task);
     }
 
     void cancelKey(final SelectionKey key) {
