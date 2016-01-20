@@ -63,6 +63,19 @@ final class NioSocketConduit extends NioHandle implements StreamSourceConduit, S
     @SuppressWarnings("rawtypes")
     private static final AtomicIntegerFieldUpdater<NioSocketConduit> writeTimeoutUpdater = AtomicIntegerFieldUpdater.newUpdater(NioSocketConduit.class, "writeTimeout");
 
+    /**
+     * states used for lazy suspend/resume reads
+     *
+     * 0 = read ready execution OK, reads resumed
+     * 1 = suspended, read ready not ok
+     * 2 = suspending in progress, this is a transient state, it must be entered/exiting in a try/finally block
+     * 3 = resuming in progress, this is a transient state, it must be entered/exiting in a try/finally block
+    */
+    @SuppressWarnings("unused")
+    private volatile int readState = 1;
+    private static final AtomicIntegerFieldUpdater<NioSocketConduit> readStateUpdater = AtomicIntegerFieldUpdater.newUpdater(NioSocketConduit.class, "readState");
+
+
     NioSocketConduit(final WorkerThread workerThread, final SelectionKey selectionKey, final NioSocketStreamConnection connection) {
         super(workerThread, selectionKey);
         this.connection = connection;
@@ -84,8 +97,27 @@ final class NioSocketConduit extends NioHandle implements StreamSourceConduit, S
                 }
             }
             if (Bits.allAreSet(ops, SelectionKey.OP_READ)) try {
-                if (isReadShutdown()) suspendReads();
-                readReadyHandler.readReady();
+                if (isReadShutdown()) realSuspendReads();
+                //read the state, we can only execute if the state is zero
+                int state = readState;
+                while (state != 0) {
+                    //non zero state, we may need to suspend
+                    if (readStateUpdater.compareAndSet(this, 1, 2)) {
+                        //we have data while reads are suspened, actually suspend the reads
+                        try {
+                            realSuspendReads();
+                        } finally {
+                            readStateUpdater.set(this, 1);
+                        }
+                        break;
+                    }
+                    state = readState;
+                }
+
+                if(state == 0) {
+                    //we are ok to execute
+                    readReadyHandler.readReady();
+                }
             } catch (Throwable ignored) {
             }
             if (Bits.allAreSet(ops, SelectionKey.OP_WRITE)) try {
@@ -325,19 +357,50 @@ final class NioSocketConduit extends NioHandle implements StreamSourceConduit, S
     }
 
     public void resumeReads() {
-        resume(SelectionKey.OP_READ);
+        int state;
+        while (true) {
+            state = readState;
+            if(state == 0) {
+                return; //reads already resumed
+            }
+            //set the state to 3, as we are resuming
+            if(readStateUpdater.compareAndSet(this, 1, 3)) {
+                try {
+                    resume(SelectionKey.OP_READ);
+                } finally {
+                    readStateUpdater.set(this, 0);
+                }
+            }
+        }
     }
 
     public void suspendReads() {
+        int state;
+        do {
+            state = readState;
+            if(state == 1) {
+                return;
+            }
+        } while (!readStateUpdater.compareAndSet(this, 0, 1));
+    }
+
+    private void realSuspendReads() {
         suspend(SelectionKey.OP_READ);
     }
 
     public void wakeupReads() {
-        wakeup(SelectionKey.OP_READ);
+        getWriteThread().execute(new Runnable() {
+            @Override
+            public void run() {
+                readReadyHandler.readReady();
+            }
+        });
+        resumeReads();
     }
 
     public boolean isReadResumed() {
-        return isResumed(SelectionKey.OP_READ);
+        int state = readState;
+        return state == 0 || state == 3;
     }
 
     public void awaitReadable() throws IOException {
