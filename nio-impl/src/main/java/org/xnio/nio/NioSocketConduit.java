@@ -370,6 +370,7 @@ final class NioSocketConduit extends NioHandle implements StreamSourceConduit, S
                 } finally {
                     readStateUpdater.set(this, 0);
                 }
+                break;
             }
         }
     }
