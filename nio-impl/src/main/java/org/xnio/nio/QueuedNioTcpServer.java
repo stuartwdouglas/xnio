@@ -33,8 +33,10 @@ import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.Callable;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
@@ -51,10 +53,11 @@ import org.xnio.StreamConnection;
 import org.xnio.XnioExecutor;
 import org.xnio.channels.AcceptListenerSettable;
 import org.xnio.channels.AcceptingChannel;
+import org.xnio.channels.QueuedAcceptingChannel;
 import org.xnio.channels.UnsupportedOptionException;
 import org.xnio.management.XnioServerMXBean;
 
-final class QueuedNioTcpServer extends AbstractNioChannel<QueuedNioTcpServer> implements AcceptingChannel<StreamConnection>, AcceptListenerSettable<QueuedNioTcpServer> {
+final class QueuedNioTcpServer extends AbstractNioChannel<QueuedNioTcpServer> implements AcceptingChannel<StreamConnection>, AcceptListenerSettable<QueuedNioTcpServer>, QueuedAcceptingChannel<NioSocketStreamConnection> {
     private static final String FQCN = QueuedNioTcpServer.class.getName();
 
     private volatile ChannelListener<? super QueuedNioTcpServer> acceptListener;
@@ -66,7 +69,7 @@ final class QueuedNioTcpServer extends AbstractNioChannel<QueuedNioTcpServer> im
     private final ServerSocket socket;
     private final Closeable mbeanHandle;
 
-    private final List<BlockingQueue<SocketChannel>> acceptQueues;
+    private final List<BlockingQueue<Map.Entry<SocketChannel, Object>>> acceptQueues;
 
     private static final Set<Option<?>> options = Option.setBuilder()
             .add(Options.REUSE_ADDRESSES)
@@ -111,6 +114,7 @@ final class QueuedNioTcpServer extends AbstractNioChannel<QueuedNioTcpServer> im
     private int openConnections;
     private volatile boolean suspendedDueToWatermark;
     private volatile boolean suspended;
+    private volatile AcceptTask producer;
 
     private static final AtomicIntegerFieldUpdater<QueuedNioTcpServer> keepAliveUpdater = AtomicIntegerFieldUpdater.newUpdater(QueuedNioTcpServer.class, "keepAlive");
     private static final AtomicIntegerFieldUpdater<QueuedNioTcpServer> oobInlineUpdater = AtomicIntegerFieldUpdater.newUpdater(QueuedNioTcpServer.class, "oobInline");
@@ -124,7 +128,7 @@ final class QueuedNioTcpServer extends AbstractNioChannel<QueuedNioTcpServer> im
         public void run() {
             final WorkerThread current = WorkerThread.getCurrent();
             assert current != null;
-            final BlockingQueue<SocketChannel> queue = acceptQueues.get(current.getNumber());
+            final BlockingQueue<Map.Entry<SocketChannel, Object>> queue = acceptQueues.get(current.getNumber());
             ChannelListeners.invokeChannelListener(QueuedNioTcpServer.this, getAcceptListener());
             if (! queue.isEmpty()) {
                 current.execute(this);
@@ -152,9 +156,9 @@ final class QueuedNioTcpServer extends AbstractNioChannel<QueuedNioTcpServer> im
         this.channel = channel;
         this.thread = worker.getAcceptThread();
         final WorkerThread[] workerThreads = worker.getAll();
-        final List<BlockingQueue<SocketChannel>> acceptQueues = new ArrayList<>(workerThreads.length);
+        final List<BlockingQueue<Map.Entry<SocketChannel, Object>>> acceptQueues = new ArrayList<>(workerThreads.length);
         for (int i = 0; i < workerThreads.length; i++) {
-            acceptQueues.add(i, new LinkedBlockingQueue<SocketChannel>());
+            acceptQueues.add(i, new LinkedBlockingQueue<Map.Entry<SocketChannel, Object>>());
         }
         this.acceptQueues = acceptQueues;
         socket = channel.socket();
@@ -370,7 +374,20 @@ final class QueuedNioTcpServer extends AbstractNioChannel<QueuedNioTcpServer> im
         return (int) ((value & CONN_LOW_MASK) >> CONN_LOW_BIT);
     }
 
+    @Override
+    public void setAcceptTask(AcceptTask function) {
+        this.producer = function;
+    }
+
     public NioSocketStreamConnection accept() throws IOException {
+        Map.Entry<NioSocketStreamConnection, Object> entry = acceptEntry();
+        if(entry != null) {
+            return entry.getKey();
+        }
+        return null;
+    }
+
+    public Map.Entry<NioSocketStreamConnection, Object> acceptEntry() throws IOException {
         if(suspendedDueToWatermark) {
             return null;
         }
@@ -378,12 +395,14 @@ final class QueuedNioTcpServer extends AbstractNioChannel<QueuedNioTcpServer> im
         if (current == null) {
             return null;
         }
-        final BlockingQueue<SocketChannel> socketChannels = acceptQueues.get(current.getNumber());
-        final SocketChannel accepted;
+        final BlockingQueue<Map.Entry<SocketChannel, Object>> socketChannels = acceptQueues.get(current.getNumber());
+        final Map.Entry<SocketChannel, Object> entry;
+        SocketChannel accepted = null;
         boolean ok = false;
         try {
-            accepted = socketChannels.poll();
-            if (accepted != null) try {
+            entry = socketChannels.poll();
+            if (entry != null) try {
+                accepted = entry.getKey();
                 accepted.configureBlocking(false);
                 final Socket socket = accepted.socket();
                 socket.setKeepAlive(keepAlive != 0);
@@ -396,7 +415,7 @@ final class QueuedNioTcpServer extends AbstractNioChannel<QueuedNioTcpServer> im
                 newConnection.setOption(Options.READ_TIMEOUT, Integer.valueOf(readTimeout));
                 newConnection.setOption(Options.WRITE_TIMEOUT, Integer.valueOf(writeTimeout));
                 ok = true;
-                return newConnection;
+                return new EntryImpl<>(newConnection, entry.getValue());
             } finally {
                 if (! ok) safeClose(accepted);
             }
@@ -513,8 +532,13 @@ final class QueuedNioTcpServer extends AbstractNioChannel<QueuedNioTcpServer> im
                 final WorkerThread ioThread = worker.getIoThread(hash);
                 ok = true;
                 final int number = ioThread.getNumber();
-                final BlockingQueue<SocketChannel> queue = acceptQueues.get(number);
-                queue.add(accepted);
+                final BlockingQueue<Map.Entry<SocketChannel, Object>> queue = acceptQueues.get(number);
+                Object value = null;
+                AcceptTask producer = this.producer;
+                if(producer != null) {
+                    value = producer.create(accepted);
+                }
+                queue.add(new EntryImpl<>(accepted, value));
                 // todo: only execute if necessary
                 ioThread.execute(acceptTask);
                 openConnections++;
@@ -534,5 +558,33 @@ final class QueuedNioTcpServer extends AbstractNioChannel<QueuedNioTcpServer> im
 
     public void connectionClosed() {
         thread.execute(connectionClosedTask);
+    }
+
+    private static final class EntryImpl<K, V> implements Map.Entry<K, V> {
+
+        private final K key;
+        private V value;
+
+        private EntryImpl(K key, V value) {
+            this.key = key;
+            this.value = value;
+        }
+
+        @Override
+        public K getKey() {
+            return key;
+        }
+
+        @Override
+        public V getValue() {
+            return value;
+        }
+
+        @Override
+        public V setValue(V value) {
+            V old = this.value;
+            this.value = value;
+            return old;
+        }
     }
 }
