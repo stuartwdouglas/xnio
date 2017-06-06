@@ -123,7 +123,7 @@ interface Log extends BasicLogger {
 
     @LogMessage(level = WARN)
     @Message(id = 8000, value = "Received an I/O error on selection: %s")
-    void selectionError(IOException e);
+    void selectionError(Throwable e);
 
     // Trace
 

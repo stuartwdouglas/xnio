@@ -512,7 +512,7 @@ final class WorkerThread extends XnioIoThread implements XnioExecutor {
                 } catch (CancelledKeyException ignored) {
                     // Mac and other buggy implementations sometimes spits these out
                     selectorLog.trace("Spurious cancelled key exception");
-                } catch (IOException e) {
+                } catch (Throwable e) {
                     selectorLog.selectionError(e);
                     // hopefully transient; should never happen
                 }
