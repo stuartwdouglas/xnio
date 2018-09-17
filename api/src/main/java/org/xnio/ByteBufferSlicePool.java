@@ -29,6 +29,7 @@ import java.util.HashSet;
 import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 
 import static org.xnio._private.Messages.msg;
@@ -175,33 +176,31 @@ public final class ByteBufferSlicePool implements Pool<ByteBuffer> {
 
     private final class PooledByteBuffer implements Pooled<ByteBuffer> {
         private final Slice region;
-        ByteBuffer buffer;
+        final AtomicReference<ByteBuffer> buffer;
 
         PooledByteBuffer(final Slice region, final ByteBuffer buffer) {
             this.region = region;
-            this.buffer = buffer;
+            this.buffer = new AtomicReference<>(buffer);
         }
 
         public void discard() {
-            final ByteBuffer buffer = this.buffer;
-            this.buffer = null;
-            if (buffer != null) {
+            final ByteBuffer buffer = this.buffer.get();
+            if (buffer != null && this.buffer.compareAndSet(buffer, null)) {
                 // free when GC'd, no sooner
                 refSet.add(new Ref(buffer, region));
             }
         }
 
         public void free() {
-            ByteBuffer buffer = this.buffer;
-            this.buffer = null;
-            if (buffer != null) {
+            final ByteBuffer buffer = this.buffer.get();
+            if (buffer != null && this.buffer.compareAndSet(buffer, null)) {
                 // trust the user, repool the buffer
                 doFree(region);
             }
         }
 
         public ByteBuffer getResource() {
-            final ByteBuffer buffer = this.buffer;
+            final ByteBuffer buffer = this.buffer.get();
             if (buffer == null) {
                 throw msg.bufferFreed();
             }
