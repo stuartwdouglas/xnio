@@ -31,6 +31,8 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.xnio._private.Messages.msg;
 
+import org.xnio._private.Messages;
+
 /**
  * A buffer pooled allocator.  This pool uses a series of buffer regions to back the
  * returned pooled buffers.  When the buffer is no longer needed, it should be freed back into the pool; failure
@@ -185,6 +187,7 @@ public final class ByteBufferSlicePool implements Pool<ByteBuffer> {
     private final class PooledByteBuffer implements Pooled<ByteBuffer> {
         private final Slice region;
         final AtomicReference<ByteBuffer> buffer;
+        volatile Thread freeThread;
 
         PooledByteBuffer(final Slice region, final ByteBuffer buffer) {
             this.region = region;
@@ -202,8 +205,11 @@ public final class ByteBufferSlicePool implements Pool<ByteBuffer> {
         public void free() {
             final ByteBuffer buffer = this.buffer.get();
             if (buffer != null && this.buffer.compareAndSet(buffer, null)) {
+                freeThread = Thread.currentThread();
                 // trust the user, repool the buffer
                 doFree(region);
+            } else if(freeThread != Thread.currentThread()) {
+                Messages.msg.error("ERROR: FREE FROM MULTIPLE THREADS", new RuntimeException("FREE FROM MULTIPLE THREADS"));
             }
         }
 
